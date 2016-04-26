@@ -1,4 +1,6 @@
 
+
+#include <windows.h>   // include important windows stuff
 #include <stdlib.h>
 
 
@@ -11,8 +13,36 @@
 #pragma comment(lib,"SDL2.lib")
 #pragma comment(lib,"SDL2main.lib")
 
+#pragma warning(disable:4244) //全部关掉
+
 #define SCREEN_WIDTH 640            //窗口尺寸
 #define SCREEN_HEIGHT 480
+
+#define NUM_ASTEROIDS 64
+
+// 类型 //////////////////////////////////////////////////////
+
+//基本无符号类型
+//typedef unsigned short W
+
+//2d顶点
+typedef struct VERTEX2DI_TYP
+{
+	int x, y;
+} VERTEX2DI,*VERTEX2DI_PTR;
+
+//3d多边形
+typedef struct POLYGON2D_TYP
+{
+	int state;			//多边形状态
+	int num_verts;		//顶点数量
+	int x0, y0;			//多边形中心位置
+	int xv, yv;			//初始加速度
+	DWORD color;		//索引或者调色板入口
+	VERTEX2DI *vlist;	//指向顶点列表
+}POLYGON2D;
+
+typedef POLYGON2D *POLYGON2D_PTR;
 
 //游戏循环状态
 #define GAME_STATE_INIT             0
@@ -48,12 +78,14 @@ SDL_Texture* gTexture = nullptr;
 
 unsigned char blocks[NUM_BLOCK_ROWS][NUM_BLOCK_COLUMNS];
 
-unsigned int pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
+UINT pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
 
-int min_clip_x = ((SCREEN_WIDTH / 2) - 100),      // clipping rectangle 
-max_clip_x = ((SCREEN_WIDTH / 2) + 100),
-min_clip_y = ((SCREEN_HEIGHT / 2) - 100),
-max_clip_y = ((SCREEN_HEIGHT / 2) + 100);
+int min_clip_x = 0,      // clipping rectangle 
+max_clip_x = SCREEN_WIDTH - 1,
+min_clip_y = 0,
+max_clip_y = SCREEN_HEIGHT- 1;
+
+POLYGON2D asteroids[NUM_ASTEROIDS];	//小行星
 
 //启动sdl，创建窗口
 bool init();
@@ -68,11 +100,15 @@ int Game_Main();
 
 void Draw_Blocks();
 
-void setPixels(int x, int y, unsigned int color);
+void setPixels(int x, int y, UINT color);
 
-void drawLine(int x1, int y1, int x2, int y2, unsigned int color);
+void drawLine(int x1, int y1, int x2, int y2, UINT color);
+
+int Draw_Clip_Line(int x1, int y1, int x2, int y2, UINT color);
 
 int Clip_Line(int &x1, int &y1, int &x2, int &y2);
+
+int Draw_Polygon2d(POLYGON2D_PTR poly);
 
 int main(int argc, char *argv[])
 {
@@ -161,7 +197,7 @@ void close()
 	SDL_Quit();
 }
 
-void setPixels(int x, int y, uint32_t color) {
+void setPixels(int x, int y, UINT color) {
 	int index = (int)(SCREEN_WIDTH * y + x);
 
 	pixels[index] = color;
@@ -175,7 +211,28 @@ int Game_Main()
 	if (game_state == GAME_STATE_INIT)
 	{
 		//  Init_Blocks();
+		// define points of asteroid
+		VERTEX2DI asteroid_vertices[8] = { 33,-3, 9,-18, -12,-9, -21,-12, -9,6, -15,15, -3,27, 21,21 };
 
+
+		// loop and initialize all asteroids
+		for (int curr_index = 0; curr_index < NUM_ASTEROIDS; curr_index++)
+		{
+
+			// initialize the asteroid
+			asteroids[curr_index].state = 1;   // turn it on
+			asteroids[curr_index].num_verts = 8;
+			asteroids[curr_index].x0 = rand() % SCREEN_WIDTH; // position it
+			asteroids[curr_index].y0 = rand() % SCREEN_HEIGHT;
+			asteroids[curr_index].xv = -8 + rand() % 17;
+			asteroids[curr_index].yv = -8 + rand() % 17;
+
+			asteroids[curr_index].vlist = new VERTEX2DI[asteroids[curr_index].num_verts];
+
+			for (int index = 0; index < asteroids[curr_index].num_verts; index++)
+				asteroids[curr_index].vlist[index] = asteroid_vertices[index];
+
+		} // end for curr_index
 
 		game_state = GAME_STATE_START_LEVEL;
 	}
@@ -194,18 +251,32 @@ int Game_Main()
 		memset(pixels, 255, 640 * 480 * sizeof(Uint32));
 
 		// draw 1000 random lines
-		for (int index = 0; index < 1000; index++)
+		for (int curr_index = 0; curr_index < NUM_ASTEROIDS; curr_index++)
 		{
-			int x1 = rand() % SCREEN_WIDTH;
-			int y1 = rand() % SCREEN_HEIGHT;
+			// glow asteroids
+			asteroids[curr_index].color = rand();
 
-			int x2 = rand() % SCREEN_WIDTH;
-			int y2 = rand() % SCREEN_HEIGHT;
+			// do the graphics
+			Draw_Polygon2d(&asteroids[curr_index]);
 
-			if(Clip_Line(x1,y1,x2,y2))
-				drawLine(x1, y1,x2, y2,rand() % 0xFFFFFFFF);
+			// move the asteroid
+			//asteroids[curr_index].x0 += asteroids[curr_index].xv;
+			//asteroids[curr_index].y0 += asteroids[curr_index].yv;
 
-		} // end for index
+			//// test for out of bounds
+			//if (asteroids[curr_index].x0 > SCREEN_WIDTH + 100)
+			//	asteroids[curr_index].x0 = -100;
+
+			//if (asteroids[curr_index].y0 > SCREEN_HEIGHT + 100)
+			//	asteroids[curr_index].y0 = -100;
+
+			//if (asteroids[curr_index].x0 < -100)
+			//	asteroids[curr_index].x0 = SCREEN_WIDTH + 100;
+
+			//if (asteroids[curr_index].y0 < -100)
+			//	asteroids[curr_index].y0 = SCREEN_HEIGHT + 100;
+
+		} // end for curr_asteroid
 
 		SDL_UpdateTexture(gTexture, NULL, pixels, 640 * sizeof(Uint32));
 
@@ -221,7 +292,7 @@ int Game_Main()
 	return 1;
 }
 
-void drawLine(int x1, int y1, int x2, int y2, unsigned int color)
+void drawLine(int x1, int y1, int x2, int y2, UINT color)
 {
 	int dx = x2 - x1;
 	int dy = y2 - y1;
@@ -527,3 +598,49 @@ int Clip_Line(int &x1, int &y1, int &x2, int &y2)
 	return(1);
 
 } // end Clip_Line
+
+
+int Draw_Polygon2d(POLYGON2D_PTR poly)
+{
+	//测试是否显示
+	if (poly->state)
+	{
+		int index;
+		for (index = 0; index < poly->num_verts - 1; index++)
+		{
+			Draw_Clip_Line(
+				poly->vlist[index].x + poly->x0,
+				poly->vlist[index].y + poly->y0,
+				poly->vlist[index + 1].x + poly->x0,
+				poly->vlist[index + 1].y + poly->y0,
+				poly->color);
+		}
+
+		//绘制首尾
+		Draw_Clip_Line(
+			poly->vlist[0].x + poly->x0,
+			poly->vlist[0].y + poly->y0,
+			poly->vlist[index].x + poly->x0,
+			poly->vlist[index].y + poly->y0,
+			poly->color);
+	}
+
+	return 1;
+}
+
+int Draw_Clip_Line(int x1, int y1, int x2, int y2, UINT color)
+{
+	int cxs, cys,
+		cxe, cye;
+
+	// clip and draw each line
+	cxs = x1;
+	cys = y1;
+	cxe = x2;
+	cye = y2;
+
+	if (Clip_Line(cxs, cys, cxe, cye))
+		drawLine(cxs, cys, cxe, cye, color);
+
+	return 1;
+}
