@@ -174,7 +174,7 @@ bool init()
 			{
 				gScreenSurface = SDL_GetWindowSurface(gWindow);
 
-				gTexture = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, 640, 480);
+				gTexture = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, SCREEN_WIDTH, 480);
 
 			}
 		}
@@ -224,8 +224,8 @@ int Game_Main()
 			asteroids[curr_index].num_verts = 8;
 			asteroids[curr_index].x0 = rand() % SCREEN_WIDTH; // position it
 			asteroids[curr_index].y0 = rand() % SCREEN_HEIGHT;
-			asteroids[curr_index].xv = -8 + rand() % 17;
-			asteroids[curr_index].yv = -8 + rand() % 17;
+			asteroids[curr_index].xv = -4 + rand() % 8;
+			asteroids[curr_index].yv = -4 + rand() % 8;
 
 			asteroids[curr_index].vlist = new VERTEX2DI[asteroids[curr_index].num_verts];
 
@@ -260,29 +260,30 @@ int Game_Main()
 			Draw_Polygon2d(&asteroids[curr_index]);
 
 			// move the asteroid
-			//asteroids[curr_index].x0 += asteroids[curr_index].xv;
-			//asteroids[curr_index].y0 += asteroids[curr_index].yv;
+			asteroids[curr_index].x0 += asteroids[curr_index].xv;
+			asteroids[curr_index].y0 += asteroids[curr_index].yv;
 
-			//// test for out of bounds
-			//if (asteroids[curr_index].x0 > SCREEN_WIDTH + 100)
-			//	asteroids[curr_index].x0 = -100;
+			// test for out of bounds
+			if (asteroids[curr_index].x0 > SCREEN_WIDTH + 100)
+				asteroids[curr_index].x0 = -100;
 
-			//if (asteroids[curr_index].y0 > SCREEN_HEIGHT + 100)
-			//	asteroids[curr_index].y0 = -100;
+			if (asteroids[curr_index].y0 > SCREEN_HEIGHT + 100)
+				asteroids[curr_index].y0 = -100;
 
-			//if (asteroids[curr_index].x0 < -100)
-			//	asteroids[curr_index].x0 = SCREEN_WIDTH + 100;
+			if (asteroids[curr_index].x0 < -100)
+				asteroids[curr_index].x0 = SCREEN_WIDTH + 100;
 
-			//if (asteroids[curr_index].y0 < -100)
-			//	asteroids[curr_index].y0 = SCREEN_HEIGHT + 100;
+			if (asteroids[curr_index].y0 < -100)
+				asteroids[curr_index].y0 = SCREEN_HEIGHT + 100;
 
 		} // end for curr_asteroid
 
-		SDL_UpdateTexture(gTexture, NULL, pixels, 640 * sizeof(Uint32));
+		SDL_UpdateTexture(gTexture, NULL, pixels, SCREEN_WIDTH * sizeof(Uint32));
 
 		//äÖÈ¾ÌùÍ¼µ½ÆÁÄ»
 		SDL_RenderCopy(gRenderer, gTexture, nullptr, nullptr);
 
+		
 
 		SDL_RenderPresent(gRenderer);
 
