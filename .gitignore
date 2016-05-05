@@ -26,3 +26,7 @@
 *.exe
 *.out
 *.app
+/SdlTest.VC.db
+/SdlTest.VC.VC.opendb
+/DirectxSurface/Debug
+/Debug

@@ -27,8 +27,10 @@ VECTOR4D cam_dir = { 0,0,0,1 };
 
 
 CAM4DV1				m_cam;			//相机
-POLYF4DV1			m_poly1;		//多边形
 
+RENDERLIST4DV1		m_rend_list;	//渲染列表
+POLYF4DV1			m_poly1;		//多边形
+POINT4D				m_poly1_pos;	//多边形世界坐标
 
 void Game_Init();
 
@@ -55,53 +57,43 @@ LRESULT CALLBACK sWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-void setPixels(int x, int y, UINT color) {
-	int index = (int)(WINDOW_WIDTH * y + x);
-
-	m_imageData[index] = color;
-}
-
-void drawLine(int x1,int y1,int x2,int y2,UINT color)
+void render()
 {
-	int dx = x2 - x1;
-	int dy = y2 - y1;
-	int ux = ((dx > 0) << 1) - 1;//x的增量方向,取1或-1
-	int uy = ((dy > 0) << 1) - 1;//y的增量方向,取1或-1
+	Sleep(100);
 
-	dx = abs(dx);
-	dy = abs(dy);
+	static MATRIX4X4 mrot;	//普通旋转矩阵
+	static float ang_y = 0;	//旋转角度
 
-	int x = x1, y = y1;
-	int eps = 0;
+	//初始化渲染列表
+	Reset_RENDERLIST4DV1(&m_rend_list);
 
-	//线段靠近x轴
-	if(dx > dy)
-	{
-		for (x = x1;x != x2 + ux;x += ux)
-		{
-			setPixels(x, y, color);
-			eps += dy;
-			if((eps << 1) >= dx)
-			{
-				y += uy;
-				eps -= dx;
-			}
-		}
-	}
-	else
-	{
-		for (y = y1; y != y2 + uy; y += uy)
-		{
-			setPixels(x, y, color);
-			eps += dx;
-			if ((eps << 1) >= dy)
-			{
-				x += ux;
-				eps -= dy;
-			}
-		}
-	}
+	//插入多边形到渲染列表
+	Insert_POLYF4DV1_RENDERLIST4DV1(&m_rend_list, &m_poly1);
+
+	//Y轴普通旋转
+	Build_XYZ_Rotation_MATRIX4X4(0, ang_y, 0, &mrot);
+
+	//旋转多边形
+	if (++ang_y > 360.0) ang_y = 0;
+
+	//旋转渲染列表中单个多边形的本地坐标
+	Transform_RENDERLIST4DV1(&m_rend_list, &mrot, TRANSFORM_LOCAL_ONLY);
+	
+	//执行本地/模型到世界转换
+	Model_To_World_RENDERLIST4DV1(&m_rend_list, &m_poly1_pos);
+
+	//生成相机矩阵
+	Build_CAM4DV1_Matrix_Euler(&m_cam, CAM_ROT_SEQ_ZYX);
+
+	World_To_Camera_RENDERLIST4DV1(&m_rend_list, &m_cam);
+
+	Camera_To_Perspective_RENDERLIST4DV1(&m_rend_list, &m_cam);
+
+	Perspective_To_Screen_RENDERLIST4DV1(&m_rend_list, &m_cam);
+
+	Draw_RENDERLIST4DV1(&m_rend_list, m_imageData, WINDOW_WIDTH);
 }
+
 
 void draw()
 {
@@ -112,7 +104,10 @@ void draw()
 
 	m_imageData = (DWORD*)lockedRect.pBits;
 
-	drawLine(0, 0, 100, 80, 0xff0000);
+	memset(m_imageData, 0, WINDOW_WIDTH* WINDOW_HEIGHT*4);
+
+	render();
+
 
 	m_surface->UnlockRect();
 	m_imageData = nullptr;
@@ -287,6 +282,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
 
 void Game_Init()
 {
+	//初始化数学引擎
+	Build_Sin_Cos_Tables();
+
 	//初始化一个多边形
 	m_poly1.state = POLY4DV1_STATE_ACTIVE;
 	m_poly1.attr = 0;
