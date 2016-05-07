@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <memory.h>
+#include <cstdio>
 
 // pi ¶¨Òå
 #define PI         ((float)3.141592654f)
@@ -10,10 +11,23 @@
 #define DEG_TO_RAD(ang)((ang)*PI/180.0)
 #define RAD_TO_DEG(rads)((rads)*180/PI)
 
+// bit manipulation macros
+#define SET_BIT(word,bit_flag)   ((word)=((word) | (bit_flag)))
+#define RESET_BIT(word,bit_flag) ((word)=((word) & (~bit_flag)))
+
 //¶à±ßĞÎºÍÃæµÄ×´Ì¬
 #define POLY4DV1_STATE_ACTIVE			0x0001
 #define POLY4DV1_STATE_CLIPPED			0x0002
 #define POLY4DV1_STATE_BACKFACE			0x0004
+
+//¶à±ßĞÎºÍÃæµÄ×´Ì¬
+#define OBJECT4DV1_STATE_ACTIVE			0x0001
+#define OBJECT4DV1_STATE_VISIBLE		0x0002
+#define OBJECT4DV1_STATE_CULLED			0x0004
+
+//ÎïÌå¶¥µã
+#define OBJECT4DV1_MAX_VERTICES			1024
+#define OBJECT4DV1_MAX_POLYS			1024
 
 //äÖÈ¾ÁĞ±í¶¨Òå
 #define RENDERLIST4DV1_MAX_POLYS		32768   //×î´ó¶à±ßĞÎÊıÁ¿
@@ -31,6 +45,11 @@
 #define CAM_ROT_SEQ_ZYX				4
 
 #define EPSILON_E5 (float)(1E-5)
+
+
+// double sided flag
+#define PLX_2SIDED_FLAG              0x1000   // this poly is double sided
+#define PLX_1SIDED_FLAG              0x0000   // this poly is single sided
 
 //´æ´¢²éÑ¯±í
 float cos_look[361];					//
@@ -200,7 +219,31 @@ typedef struct RENDERLIST4DV1_TYP
 	int num_polys;		//äÖÈ¾ÁĞ±íÖĞ°üº¬µÄ¶à±ßĞÎÊıÄ¿
 }RENDERLIST4DV1, *RENDERLIST4DV1_PTR;
 
+//»ùÓÚ¶¥µãÁĞ±íºÍ¶à±ßĞÎÁĞ±íµÄÎïÌå 
+typedef struct OBJECT4DV1_TYP
+{
+	int id;
+	char name[64];
+	int state;			//äÖÈ¾ÁĞ±íµÄ×´Ì¬
+	int attr;			//äÖÈ¾ÁĞ±íµÄÊôĞÔ
 
+	float avg_radius;
+	float max_radius;
+
+	POINT4D world_pos;
+
+	VECTOR4D dir;
+
+	VECTOR4D ux, uy, uz;
+
+	int num_vertices;	//ÎïÌå¶¥µãÊı
+
+	POINT4D vlist_local[OBJECT4DV1_MAX_VERTICES];
+	POINT4D vlist_trans[OBJECT4DV1_MAX_VERTICES];
+
+	int num_polys;		//ÎïÌå·ç¸ñµÄ¶à±ßĞÎÊı
+	POLY4DV1 plist[OBJECT4DV1_MAX_POLYS];		//¶à±ßĞÎÊı×é
+}OBJECT4DV1,*OBJECT4DV1_PTR;
 
 //Èı½Çº¯Êı
 // trig functions
@@ -338,11 +381,32 @@ inline void Reset_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list)
 	rend_list->num_polys = 0;
 }
 
+inline void Reset_OBJECT4DV1(OBJECT4DV1_PTR obj)
+{
+	RESET_BIT(obj->state, OBJECT4DV1_STATE_CULLED);
+
+	// now the clipped and backface flags for the polygons 
+	for (int poly = 0; poly < obj->num_polys; poly++)
+	{
+		// acquire polygon
+		POLY4DV1_PTR curr_poly = &obj->plist[poly];
+
+		// first is this polygon even visible?
+		if (!(curr_poly->state & POLY4DV1_STATE_ACTIVE))
+			continue; // move onto next poly
+
+					  // reset clipped and backface flags
+		RESET_BIT(curr_poly->state, POLY4DV1_STATE_CLIPPED);
+		RESET_BIT(curr_poly->state, POLY4DV1_STATE_BACKFACE);
+
+	} // end for poly	
+}
+
 //ÉèÖÃÏñËØ
 inline void setPixels(int x, int y, UINT color, DWORD*	imageData, int imageWidth) {
 	int index = (int)(imageWidth * y + x);
 
-	imageData[index] = color;
+	imageData[index] = 0xff0000;
 }
 
 //»æÖÆÏßÌõ
@@ -471,6 +535,44 @@ inline void Draw_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list, DWORD* imageData, 
 
 }
 
+//»æÖÆäÖÈ¾ÁĞ±í
+inline void Draw_OBJECT4DV1_Wire16(OBJECT4DV1_PTR obj, DWORD* imageData, int imageWidth)
+{
+	//Õâ¸öº¯Êı¡°Ö´ĞĞ¡±äÖÈ¾ÁĞ±í
+	//ÔÚÏß¿òÄ£ĞÍÏÂ£¬ÎŞĞè¶Ô¶à±ßĞÎ½øĞĞÅÅĞò£¬µ«ºóÃæĞèÒªÕâÑù×ö£¬ÒÔÏ÷³ıÒş²ØÃæ
+	//ÁíÍâ£¬ÕâÀïÈÃº¯ÊıÈ¥ÅĞ¶ÏÎ»Éî£¬²¢µ÷ÓÃÏàÓ¦µÄ¹âÕ¤»¯Æ÷
+
+	//ÏÖÔÚ£¬ÎÒÃÇÖ»ÓĞÒ»¸ö¶à±ßĞÎÁĞ±í£¬¿ÉÒÔ»æÖÆËü
+	//µ«ÔÚÏß¿òÒıÇæÖĞ£¬¡°±³Ãæ¡±¸ÅÄîÎŞ¹Ø½ôÒª
+	for (int poly = 0; poly < obj->num_polys; poly++)
+	{
+		POLYF4DV1_PTR polyPtr = (POLYF4DV1_PTR)&obj->plist[poly];
+
+		if (!(polyPtr->state & POLY4DV1_STATE_ACTIVE) ||
+			(polyPtr->state & POLY4DV1_STATE_CLIPPED) ||
+			(polyPtr->state & POLY4DV1_STATE_BACKFACE))
+			continue;//½øÈëÏÂÒ»¸ö¶à±ßĞÎ
+
+		int vindex_0 = obj->plist[poly].vert[0];
+		int vindex_1 = obj->plist[poly].vert[1];
+		int vindex_2 = obj->plist[poly].vert[2];
+
+		//»æÖÆÈı½ÇĞÎµÄ±ß
+		//2d³õÊ¼»¯¹ı³ÌÖĞÒÑ¾­ÉèÖÃºÃ²Ã¼ô£¬Î»ÓÚ2dÆÁÄ»/´°¿ÚÍâµÄ¶à±ßĞÎ¶¼½«±»²Ã¼ôµô
+		drawLine(obj->vlist_trans[vindex_0].x, obj->vlist_trans[vindex_0].y,
+			obj->vlist_trans[vindex_1].x, obj->vlist_trans[vindex_1].y,
+			polyPtr->color, imageData, imageWidth);
+
+		drawLine(obj->vlist_trans[vindex_1].x, obj->vlist_trans[vindex_1].y,
+			obj->vlist_trans[vindex_2].x, obj->vlist_trans[vindex_2].y,
+			polyPtr->color, imageData, imageWidth);
+
+		drawLine(obj->vlist_trans[vindex_2].x, obj->vlist_trans[vindex_2].y,
+			obj->vlist_trans[vindex_0].x, obj->vlist_trans[vindex_0].y,
+			polyPtr->color, imageData, imageWidth);
+	}
+
+}
 inline void Mat_Init_4X4(MATRIX4X4_PTR ma,
 						float m00, float m01, float m02, float m03,
 						float m10, float m11, float m12, float m13,
@@ -851,6 +953,35 @@ inline void Transform_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list,	//×ª»»µÄäÖÈ¾Á
 	} // end switch
 }
 
+inline void Transform_OBJECT4DV1(OBJECT4DV1_PTR obj, // object to transform
+	MATRIX4X4_PTR mt,   // transformation matrix
+	int coord_select,   // selects coords to transform
+	int transform_basis) // flags if vector orientation
+						 // should be transformed too
+{
+	// this function simply transforms all of the vertices in the local or trans
+	// array by the sent matrix
+
+	// what coordinates should be transformed?
+	switch (coord_select)
+	{
+		case TRANSFORM_LOCAL_ONLY:
+		{
+			// transform each local/model vertex of the object mesh in place
+			for (int vertex = 0; vertex < obj->num_vertices; vertex++)
+			{
+				POINT4D presult; // hold result of each transformation
+
+								 // transform point
+				Mat_Mul_VECTOR4D_4X4(&obj->vlist_local[vertex], mt, &presult);
+
+				// store result back
+				VECTOR4D_COPY(&obj->vlist_local[vertex], &presult);
+			} // end for index
+		} break;
+	}
+}
+
 inline void VECTOR4D_Add(VECTOR4D_PTR va, VECTOR4D_PTR vb, VECTOR4D_PTR vsum)
 {
 	// this function adds va+vb and return it in vsum
@@ -878,6 +1009,26 @@ inline void Model_To_World_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list,POINT4D_P
 			VECTOR4D_Add(&curr_poly->vlist[vertex], world_pos, &curr_poly->tvlist[vertex]);
 		}
 	}
+}
+
+inline void Model_To_World_OBJECT4DV1(OBJECT4DV1_PTR obj, int coord_select = TRANSFORM_LOCAL_TO_TRANS)
+{
+	if (coord_select == TRANSFORM_LOCAL_TO_TRANS)
+	{
+		for (int vertex = 0; vertex < obj->num_vertices; vertex++)
+		{
+			// translate vertex
+			VECTOR4D_Add(&obj->vlist_local[vertex], &obj->world_pos, &obj->vlist_trans[vertex]);
+		} // end for vertex
+	} // end if local
+	else
+	{ // TRANSFORM_TRANS_ONLY
+		for (int vertex = 0; vertex < obj->num_vertices; vertex++)
+		{
+			// translate vertex
+			VECTOR4D_Add(&obj->vlist_trans[vertex], &obj->world_pos, &obj->vlist_trans[vertex]);
+		} // end for vertex
+	} // end else trans
 }
 
 inline void Build_CAM4DV1_Matrix_Euler(CAM4DV1_PTR cam,int cam_rot_seq)
@@ -966,6 +1117,22 @@ inline void World_To_Camera_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list,CAM4DV1_
 	}
 }
 
+inline void World_To_Camera_OBJECT4DV1(OBJECT4DV1_PTR obj, CAM4DV1_PTR cam)
+{
+	for (int vertex = 0; vertex < obj->num_vertices; vertex++)
+	{
+		// transform the vertex by the mcam matrix within the camera
+		// it better be valid!
+		POINT4D presult; // hold result of each transformation
+
+						 // transform point
+		Mat_Mul_VECTOR4D_4X4(&obj->vlist_trans[vertex], &cam->mcam, &presult);
+
+		// store result back
+		VECTOR4D_COPY(&obj->vlist_trans[vertex], &presult);
+	} // end for vertex
+}
+
 inline void Camera_To_Perspective_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list, CAM4DV1_PTR cam)
 {
 	for (int poly = 0; poly < rend_list->num_polys; ++poly)
@@ -989,26 +1156,138 @@ inline void Camera_To_Perspective_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list, C
 	}
 }
 
-inline void Perspective_To_Screen_RENDERLIST4DV1(RENDERLIST4DV1_PTR rend_list, CAM4DV1_PTR cam)
+inline void Camera_To_Perspective_OBJECT4DV1(OBJECT4DV1_PTR obj, CAM4DV1_PTR cam)
 {
-	for (int poly = 0; poly < rend_list->num_polys; ++poly)
+	for (int vertex = 0; vertex < obj->num_vertices; vertex++)
 	{
-		POLYF4DV1_PTR curr_poly = rend_list->poly_ptrs[poly];
+		float z = obj->vlist_trans[vertex].z;
 
-		if ((curr_poly == NULL) || !(curr_poly->state & POLY4DV1_STATE_ACTIVE) ||
-			(curr_poly->state & POLY4DV1_STATE_CLIPPED) ||
-			(curr_poly->state & POLY4DV1_STATE_BACKFACE))
+		// transform the vertex by the view parameters in the camera
+		obj->vlist_trans[vertex].x = cam->view_dist*obj->vlist_trans[vertex].x / z;
+		obj->vlist_trans[vertex].y = cam->view_dist*obj->vlist_trans[vertex].y*cam->aspect_ratio / z;
+		// z = z, so no change
+
+		// not that we are NOT dividing by the homogenous w coordinate since
+		// we are not using a matrix operation for this version of the function 
+
+	} // end for vertex
+}
+
+inline void Perspective_To_Screen_OBJECT4DV1(OBJECT4DV1_PTR obj, CAM4DV1_PTR cam)
+{
+	float alpha = (0.5*cam->viewport_width - 0.5);
+	float beta = (0.5*cam->viewport_height - 0.5);
+
+	for (int vertex = 0; vertex < obj->num_vertices; vertex++)
+	{
+		// assumes the vertex is in perspective normalized coords from -1 to 1
+		// on each axis, simple scale them to viewport and invert y axis and project
+		// to screen
+
+		// transform the vertex by the view parameters in the camera
+		obj->vlist_trans[vertex].x = alpha + alpha*obj->vlist_trans[vertex].x;
+		obj->vlist_trans[vertex].y = beta - beta *obj->vlist_trans[vertex].y;
+
+	} // end for vertex
+}
+
+inline char *Get_Line_PLG(char *buffer,int maxlength, FILE *fp)
+{
+	int index = 0;
+	int length = 0;
+
+	while(1)
+	{
+		if (!fgets(buffer, maxlength, fp))
+			return NULL;
+
+		//¼ÆËã¿Õ¸ñÊı
+		for (length = strlen(buffer), index = 0; isspace(buffer[index]); index++);
+
+		if (index >= length || buffer[index] == '#')
 			continue;
-
-		float alpha = static_cast<float>((0.5 * cam->viewport_width - 0.5));
-		float beta = static_cast<float>((0.5 * cam->viewport_height - 0.5));
-
-		for (int vertex = 0; vertex < 3; ++vertex)
-		{
-			POINT4D_PTR point = &curr_poly->tvlist[vertex];
-
-			point->x = alpha + alpha * point->x;
-			point->y = beta - beta * point->y;
-		}
+				
+			
+		//´ËÊ±µÃµ½ÁËÒ»¸öÊı¾İĞĞ
+		return &buffer[index];
 	}
+}
+
+inline int Load_OBJECT4DV1_PLG(OBJECT4DV1* obj, const char* filename, VECTOR4D* vscale, VECTOR4D* vpos, VECTOR4D* rot)
+{
+	
+	FILE *fp;
+	char buffer[256];
+
+	char *token_string;
+
+	memset(obj, 0, sizeof(OBJECT4DV1));
+
+	obj->state = OBJECT4DV1_STATE_ACTIVE | OBJECT4DV1_STATE_VISIBLE;
+
+	obj->world_pos.x = vpos->x;
+	obj->world_pos.y = vpos->y;
+	obj->world_pos.z = vpos->z;
+	obj->world_pos.w = vpos->w;
+
+	if(!(fp = fopen(filename,"r")))
+	{
+		printf("Couldn't open PLG file %s", filename);
+		return 0;
+	}
+
+	//¶ÁÈ¡ÎïÌåÃèÊö·û
+	if(!(token_string = Get_Line_PLG(buffer,255,fp)))
+	{
+		printf("PLG file error with file %s(object descriptor invalid).", filename);
+		return 0;
+	}
+
+	//¶ÔÎïÌåÃèÊö·û½øĞĞ·ÖÎö
+	sscanf(token_string, "%s %d %d", obj->name, &obj->num_vertices, &obj->num_polys);
+
+	//¼ÓÔØ¶¥µãÁĞ±í
+	for (int vertex = 0; vertex < obj->num_vertices; ++vertex)
+	{
+		//¶ÁÈ¡ÎïÌåÃèÊö·û
+		if (!(token_string = Get_Line_PLG(buffer, 255, fp)))
+		{
+			printf("PLG file error with file %s(vertex list invalid).", filename);
+			return 0;
+		}
+
+		//·ÖÎö¶¥µã
+		sscanf(token_string, "%f %f %f", &obj->vlist_local[vertex].x, &obj->vlist_local[vertex].y, &obj->vlist_local[vertex].z);
+		obj->vlist_local[vertex].w = 1;
+
+		obj->vlist_local[vertex].x *= vscale->x;
+		obj->vlist_local[vertex].y *= vscale->y;
+		obj->vlist_local[vertex].z *= vscale->z;
+	}
+
+	int poly_surface_desc = 0;	//PLG/PLX¶à±ßĞÎÃèÊö·û
+	int poly_num_verts = 0;		//µ±Ç°¶à±ßĞÎµÄ¶¥µãÊı
+	char temp_string[8];
+
+	//µÚÎå²½£º¼ÓÔØ¶à±ßĞÎÁĞ±í
+	for (int poly = 0; poly < obj->num_polys; ++poly)
+	{
+		//¶ÁÈ¡¶à±ßĞÎÃèÊö·û
+		if (!(token_string = Get_Line_PLG(buffer, 255, fp)))
+		{
+			printf("PLG file error with file %s(polygon descriptor invalid).", filename);
+			return 0;
+		}
+
+		//Ã¿¸ö¶à±ßĞÎÓĞÈı¸ö¶¥µã
+
+		sscanf(token_string, "%s %d %d %d %d", temp_string,&poly_num_verts,&obj->plist[poly].vert[0], &obj->plist[poly].vert[1], &obj->plist[poly].vert[2]);
+
+
+		obj->plist[poly].state = POLY4DV1_STATE_ACTIVE;
+	}
+
+	fclose(fp);
+
+	return 1;
 }
